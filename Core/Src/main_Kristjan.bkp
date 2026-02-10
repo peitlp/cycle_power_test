@@ -1,0 +1,912 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2022 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "string.h"
+#include "stdio.h"
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+ ADC_HandleTypeDef hadc1;
+
+ETH_HandleTypeDef heth;
+
+TIM_HandleTypeDef htim14;
+
+UART_HandleTypeDef huart3;
+
+PCD_HandleTypeDef hpcd_USB_OTG_FS;
+
+/* USER CODE BEGIN PV */
+int activeCount = 0;
+int i;
+int cntDly = 0;
+int my_HAL_Delay = 1;
+float voltageSense;
+int shuntValues[11];
+int StartSet = 0;
+int CurrADC_Val=0;
+int cntNr [11];
+int CycleNr = 0;
+int NrOfADCs = 0;
+int currVals[2000];
+int curValsCntr = 0;
+int currValsMax, currValsMin;
+long  BusyCounter = 0;
+int CH2PulsCounter = 0;
+GPIO_PinState prev_CH1;
+GPIO_PinState prev_CH2;
+GPIO_PinState current_CH1;
+GPIO_PinState current_CH2;
+GPIO_PinState current_sense;
+GPIO_PinState StartProce;
+GPIO_PinState PLC_IN1,PLC_IN2,PLC_IN3;
+
+unsigned int myDelay = 0;
+unsigned int isPG0low = 0;
+char myString[50];
+char msg[255];
+short msgCounter;
+unsigned int FalsePG1;
+unsigned int NrOfChanges_PG1;
+unsigned char TestRunning;
+unsigned int Counter1, Counter2,Counter3;
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_ETH_Init(void);
+static void MX_USART3_UART_Init(void);
+static void MX_USB_OTG_FS_PCD_Init(void);
+static void MX_TIM14_Init(void);
+static void MX_ADC1_Init(void);
+/* USER CODE BEGIN PFP */
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+void ADCReadTask(){
+	//start ADC conversion
+	if (cntDly % 20 == 0) {
+		HAL_ADC_Start(&hadc1);
+
+		HAL_StatusTypeDef myADC_Status 								= HAL_ADC_PollForConversion(&hadc1 , 100);
+		if 		(myADC_Status == HAL_OK )			CurrADC_Val 	+= HAL_ADC_GetValue(&hadc1);
+		else if (myADC_Status == HAL_TIMEOUT) 		CurrADC_Val 	= 9999;
+		else 										CurrADC_Val 	= 9998;
+
+		NrOfADCs++;
+		shuntValues[activeCount] = CurrADC_Val / NrOfADCs;
+		HAL_ADC_Stop(&hadc1);
+	}
+	cntNr[activeCount] = cntDly;
+	cntDly++;
+	return;
+}
+
+void ReadADC() {
+	if (prev_CH1 == GPIO_PIN_RESET) {
+		cntDly 			= 0;
+		CurrADC_Val 	= 0;
+		NrOfADCs 		= 0;
+	}
+	ADCReadTask();
+	return;
+}
+
+void ReadADC_Low() {
+	if (prev_CH1 == GPIO_PIN_SET) {
+		cntDly 			= 0;
+		CurrADC_Val 	= 0;
+		NrOfADCs 		= 0;
+	}
+	ADCReadTask();
+	return;
+}
+
+
+void ReadADC_cont() {
+uint32_t myADC_val;
+uint32_t myTicker;
+	//start ADC conversion
+	myTicker = HAL_GetTick();
+	HAL_ADC_Start(&hadc1);
+
+	HAL_StatusTypeDef myADC_Status = HAL_ADC_PollForConversion(&hadc1 , 100);
+	if 		(myADC_Status == HAL_OK )			myADC_val = HAL_ADC_GetValue(&hadc1);
+	else if (myADC_Status == HAL_TIMEOUT) 		myADC_val = 9999;
+	else 										myADC_val = 9998;
+
+	myADC_val = HAL_ADC_GetValue(&hadc1);
+	//sprintf(msg, "ADCval 1: %d %d \r\n",myADC_val, (HAL_GetTick()-myTicker));
+	//HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+	HAL_ADC_Stop(&hadc1);
+	if (curValsCntr >= 0 && curValsCntr < 2000) {
+		currVals[curValsCntr] = myADC_val;
+		curValsCntr++;
+	}
+
+	/*
+	sprintf(msg, "ADCval 2: %d %d \r\n",myADC_val, (HAL_GetTick()-myTicker));
+	HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+	HAL_Delay(my_HAL_Delay);
+	*/
+	return;
+}
+
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+  /* USER CODE BEGIN 1 */
+	// uint16_t timer_val;
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  //MX_ETH_Init();
+  MX_USART3_UART_Init();
+  //MX_USB_OTG_FS_PCD_Init();
+  //MX_TIM14_Init();
+  MX_ADC1_Init();
+  /* USER CODE BEGIN 2 */
+
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  //start timer
+
+  HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_RESET);
+  sprintf(msg, "BOOTING \r\n");
+  HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+  msgCounter=0;
+ // HAL_ADC_Start(&hadc1);
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+
+  while (1) {
+
+	current_CH1 = HAL_GPIO_ReadPin(GPIOG, GPIO_PIN_1);			//CH1 from generator
+	current_CH2 = HAL_GPIO_ReadPin(GPIOG, GPIO_PIN_0);			//CH2 from generator
+	StartProce 	= HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_2);			//Start pulse from PLC
+	PLC_IN1		= HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_6);			//
+	PLC_IN2		= HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_1);			//
+	PLC_IN3		= HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_3);			//
+
+	if (StartProce == GPIO_PIN_SET && StartSet == 0)
+	{
+		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_9, GPIO_PIN_SET);		//trigger ch2
+		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET);	//reset temperature bank select pin
+		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_8, GPIO_PIN_RESET);	//reset temperature bank select pin
+		StartSet = 1;
+		Counter1++;
+
+	}
+	else if (StartProce == GPIO_PIN_RESET && StartSet == 1)
+	{
+		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_9, GPIO_PIN_RESET);	//reset trigger for CH2
+		StartSet = 0;
+		Counter2++;
+	}
+
+	if (current_CH1 == GPIO_PIN_SET && (current_CH2 == GPIO_PIN_RESET || StartProce == GPIO_PIN_RESET)) FalsePG1++;
+	if (prev_CH1 != current_CH1) NrOfChanges_PG1++;
+
+
+	// check if CH2 rising edge - toggle temperature banks
+	if (prev_CH2 == GPIO_PIN_RESET && current_CH2 == GPIO_PIN_SET) {
+		CH2PulsCounter++;
+		if (CH2PulsCounter % 5 == 0) {
+			HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_1);
+			HAL_GPIO_TogglePin(GPIOF, GPIO_PIN_8);
+		}
+	}
+
+	if(current_CH2 == GPIO_PIN_SET && StartProce == GPIO_PIN_SET) {
+		 if(current_CH1 == GPIO_PIN_SET) {  // all signals high - set correct output
+
+			 HAL_GPIO_WritePin(GPIOF, GPIO_PIN_0,	GPIO_PIN_SET);
+			 BusyCounter = 0;
+
+			 switch (activeCount) {
+			 	case 0:
+			 		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13,	GPIO_PIN_SET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+					ReadADC();
+			 		break;
+			 	case 1:
+			 		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_SET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+					ReadADC();
+					break;
+			 	case 2:
+			 		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_SET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+					ReadADC();
+					break;
+			 	case 3:
+			 		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_SET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+					ReadADC();
+					break;
+			 	case 4:
+			 		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_SET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+					ReadADC();
+					break;
+			 	case 5:
+			 		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_SET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+					ReadADC();
+					break;
+			 	case 6:
+			 		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_SET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+					ReadADC();
+					break;
+			 	case 7:
+			 		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_SET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+					ReadADC();
+					break;
+			 	case 8:
+
+			 		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_SET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+					ReadADC();
+					break;
+			 	case 9:
+
+			 		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_SET);
+					ReadADC();
+					break;
+			 	default:
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET); //
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);  //
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET); //
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET); //
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);  //
+					HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);  //
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);  //
+					HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);  //
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);  //
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);  //
+			 		break;
+			 }
+		 }
+		 else {
+			 //when falling edge on CH1 detected, increase activeCount
+			 	if (prev_CH1 == GPIO_PIN_SET) {
+			 		activeCount++;
+			 		cntDly = 0;
+			 	}
+				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET); //
+				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);  //
+				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET); //
+				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET); //
+				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);  //
+				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);  //
+				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);  //
+				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);  //
+				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);  //
+				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);  //
+				if (activeCount == 10) {
+					ReadADC_Low();
+		 	 	}
+				if (activeCount > 9 && cntDly > 50) {
+					for (i = 0; i < 11; i++)
+					{
+						if (shuntValues[i] > 1700) sprintf(msg, "P%d = %d ; %d  *****\r\n",i , shuntValues[i], cntNr[i]);
+						else sprintf(msg, "P%d = %d ; %d \r\n",i , shuntValues[i], cntNr[i]);
+						shuntValues[i] = 0;
+						cntNr[i] = 8000;
+						HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+
+					}
+					sprintf(msg, "FalsePG1: %d, NrOfChanges_PG1: %d CH2_P: %d\r\n", FalsePG1, NrOfChanges_PG1,CH2PulsCounter);
+					FalsePG1 = 0;
+					NrOfChanges_PG1 = 0;
+					HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+					activeCount = 0;
+				}
+
+		 }
+	}
+	else {
+		BusyCounter++;
+		if (BusyCounter >= 72000){
+			BusyCounter = 12001;
+		}
+		else if (BusyCounter >= 42000){
+			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_SET);	//reset temperature bank select pin
+			HAL_GPIO_WritePin(GPIOF, GPIO_PIN_8, GPIO_PIN_SET);	//reset temperature bank select pin
+		}
+		else if (BusyCounter >= 12000){
+			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET);	//reset temperature bank select pin
+			HAL_GPIO_WritePin(GPIOF, GPIO_PIN_8, GPIO_PIN_RESET);	//reset temperature bank select pin
+
+			CH2PulsCounter = 0;
+			if (BusyCounter == 12000)  {
+				sprintf(msg, "Counter1: %d, Counter2: %d \r\n", Counter1, Counter2);
+				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+			}
+		}
+
+		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET); //
+		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);  //
+		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET); //
+		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET); //
+		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);  //
+		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);  //
+		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);  //
+		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);  //
+		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);  //
+		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);  //
+		activeCount = 0;
+		ReadADC_cont();
+		if (curValsCntr == 2000) {
+			currValsMax = currVals[0];
+			currValsMin = currVals[0];
+			for (i = 0; i < 1999; i++) {
+				sprintf(msg, "%d\r\n ",currVals[i]);
+				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+				if (currVals[i] > currValsMax) currValsMax = currVals[i];
+				if (currVals[i] < currValsMin) currValsMin = currVals[i];
+				currVals[i] = 0;
+			}
+			sprintf(msg, "currValsMax = %d ; currValsMin= %d \r\n", currValsMax, currValsMin);
+			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+			curValsCntr++;
+		}
+	 }
+	 //ReadADC_cont();
+
+	 msgCounter=0;
+	 prev_CH1 = current_CH1;
+	 prev_CH2 = current_CH2;
+
+	 myDelay++;
+
+	 if (myDelay > 10000) {
+		 myDelay = 0;
+	 }
+
+  }
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Configure LSE Drive Capability
+  */
+  HAL_PWR_EnableBkUpAccess();
+
+  /** Configure the main internal regulator output voltage
+  */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = 4;
+  RCC_OscInitStruct.PLL.PLLN = 144;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = 6;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+
+  /* USER CODE BEGIN ADC1_Init 0 */
+
+  /* USER CODE END ADC1_Init 0 */
+
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC1_Init 1 */
+
+  /* USER CODE END ADC1_Init 1 */
+
+  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
+  */
+  hadc1.Instance 						= ADC1;
+  hadc1.Init.ClockPrescaler 			= ADC_CLOCK_SYNC_PCLK_DIV2;
+  hadc1.Init.Resolution 				= ADC_RESOLUTION_12B;
+  hadc1.Init.ScanConvMode				= ADC_SCAN_DISABLE;
+  hadc1.Init.ContinuousConvMode 		= DISABLE;
+  hadc1.Init.DiscontinuousConvMode 		= DISABLE;
+  hadc1.Init.ExternalTrigConvEdge 		= ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.ExternalTrigConv 			= ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign 					= ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion 			= 1;
+  hadc1.Init.DMAContinuousRequests 		= DISABLE;
+
+  //hadc1.Init.EOCSelection 				= ADC_EOC_SINGLE_CONV;		//pipo
+  hadc1.Init.EOCSelection 			= ADC_EOC_SEQ_CONV;
+
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel 						= ADC_CHANNEL_3;
+  sConfig.Rank 							= ADC_REGULAR_RANK_1;
+  //sConfig.SamplingTime 					= ADC_SAMPLETIME_112CYCLES;
+  sConfig.SamplingTime 					= ADC_SAMPLETIME_3CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
+
+  /* USER CODE END ADC1_Init 2 */
+
+}
+
+/**
+  * @brief ETH Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ETH_Init(void)
+{
+
+  /* USER CODE BEGIN ETH_Init 0 */
+
+  /* USER CODE END ETH_Init 0 */
+
+   static uint8_t MACAddr[6];
+
+  /* USER CODE BEGIN ETH_Init 1 */
+
+  /* USER CODE END ETH_Init 1 */
+  heth.Instance = ETH;
+  heth.Init.AutoNegotiation = ETH_AUTONEGOTIATION_ENABLE;
+  heth.Init.Speed = ETH_SPEED_100M;
+  heth.Init.DuplexMode = ETH_MODE_FULLDUPLEX;
+  heth.Init.PhyAddress = LAN8742A_PHY_ADDRESS;
+  MACAddr[0] = 0x00;
+  MACAddr[1] = 0x80;
+  MACAddr[2] = 0xE1;
+  MACAddr[3] = 0x00;
+  MACAddr[4] = 0x00;
+  MACAddr[5] = 0x00;
+  heth.Init.MACAddr = &MACAddr[0];
+  heth.Init.RxMode = ETH_RXPOLLING_MODE;
+  heth.Init.ChecksumMode = ETH_CHECKSUM_BY_HARDWARE;
+  heth.Init.MediaInterface = ETH_MEDIA_INTERFACE_RMII;
+
+  /* USER CODE BEGIN MACADDRESS */
+
+  /* USER CODE END MACADDRESS */
+
+  if (HAL_ETH_Init(&heth) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ETH_Init 2 */
+
+  /* USER CODE END ETH_Init 2 */
+
+}
+
+/**
+  * @brief TIM14 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM14_Init(void)
+{
+
+  /* USER CODE BEGIN TIM14_Init 0 */
+
+  /* USER CODE END TIM14_Init 0 */
+
+  /* USER CODE BEGIN TIM14_Init 1 */
+
+  /* USER CODE END TIM14_Init 1 */
+  htim14.Instance = TIM14;
+  htim14.Init.Prescaler = 7200 -1 ;
+  htim14.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim14.Init.Period = 10000;
+  htim14.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim14.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim14) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM14_Init 2 */
+
+  /* USER CODE END TIM14_Init 2 */
+
+}
+
+/**
+  * @brief USART3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART3_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART3_Init 0 */
+
+  /* USER CODE END USART3_Init 0 */
+
+  /* USER CODE BEGIN USART3_Init 1 */
+
+  /* USER CODE END USART3_Init 1 */
+  huart3.Instance = USART3;
+  huart3.Init.BaudRate = 115200;
+  huart3.Init.WordLength = UART_WORDLENGTH_8B;
+  huart3.Init.StopBits = UART_STOPBITS_1;
+  huart3.Init.Parity = UART_PARITY_NONE;
+  huart3.Init.Mode = UART_MODE_TX_RX;
+  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART3_Init 2 */
+
+  /* USER CODE END USART3_Init 2 */
+
+}
+
+/**
+  * @brief USB_OTG_FS Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USB_OTG_FS_PCD_Init(void)
+{
+
+  /* USER CODE BEGIN USB_OTG_FS_Init 0 */
+
+  /* USER CODE END USB_OTG_FS_Init 0 */
+
+  /* USER CODE BEGIN USB_OTG_FS_Init 1 */
+
+  /* USER CODE END USB_OTG_FS_Init 1 */
+  hpcd_USB_OTG_FS.Instance = USB_OTG_FS;
+  hpcd_USB_OTG_FS.Init.dev_endpoints = 6;
+  hpcd_USB_OTG_FS.Init.speed = PCD_SPEED_FULL;
+  hpcd_USB_OTG_FS.Init.dma_enable = DISABLE;
+  hpcd_USB_OTG_FS.Init.phy_itface = PCD_PHY_EMBEDDED;
+  hpcd_USB_OTG_FS.Init.Sof_enable = ENABLE;
+  hpcd_USB_OTG_FS.Init.low_power_enable = DISABLE;
+  hpcd_USB_OTG_FS.Init.lpm_enable = DISABLE;
+  hpcd_USB_OTG_FS.Init.vbus_sensing_enable = ENABLE;
+  hpcd_USB_OTG_FS.Init.use_dedicated_ep1 = DISABLE;
+  if (HAL_PCD_Init(&hpcd_USB_OTG_FS) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USB_OTG_FS_Init 2 */
+
+  /* USER CODE END USB_OTG_FS_Init 2 */
+
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+	  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+	  /* GPIO Ports Clock Enable */
+	  __HAL_RCC_GPIOC_CLK_ENABLE();
+	  __HAL_RCC_GPIOF_CLK_ENABLE();
+	  __HAL_RCC_GPIOH_CLK_ENABLE();
+	  __HAL_RCC_GPIOA_CLK_ENABLE();
+	  __HAL_RCC_GPIOB_CLK_ENABLE();
+	  __HAL_RCC_GPIOG_CLK_ENABLE();
+	  __HAL_RCC_GPIOE_CLK_ENABLE();
+	  __HAL_RCC_GPIOD_CLK_ENABLE();
+
+	  /*Configure GPIO pin Output Level */
+	  HAL_GPIO_WritePin(GPIOF, GPIO_PIN_0|GPIO0_Pin|GPIO3_Pin|GPIO5_Pin, GPIO_PIN_RESET);
+
+	  /*Configure GPIO pin Output Level */
+	  HAL_GPIO_WritePin(GPIOB, LD1_Pin|LD3_Pin|LD2_Pin, GPIO_PIN_RESET);
+
+	  /*Configure GPIO pin Output Level */
+	  HAL_GPIO_WritePin(GPIOE, GPIO9_Pin|GPIO8_Pin|GPIO1_Pin|GPIO2_Pin
+	                          |GPIO4_Pin, GPIO_PIN_RESET);
+
+	  /*Configure GPIO pin Output Level */
+	  HAL_GPIO_WritePin(GPIOG, USB_PowerSwitchOn_Pin|GPIO7_Pin|GPIO6_Pin, GPIO_PIN_RESET);
+
+	  /*Configure GPIO pin Output Level */
+	  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET);
+
+	  /*Configure GPIO pin : USER_Btn_Pin */
+	  GPIO_InitStruct.Pin = USER_Btn_Pin;
+	  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+	  GPIO_InitStruct.Pull = GPIO_NOPULL;
+	  HAL_GPIO_Init(USER_Btn_GPIO_Port, &GPIO_InitStruct);
+
+
+
+
+	  /*Configure GPIO pins : PG0 PG1 USB_OverCurrent_Pin */
+	  //GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|USB_OverCurrent_Pin;
+	  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1;
+	  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+	  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+	  HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
+
+	  /*Configure GPIO pins : PF2 - start from PLC */
+	  GPIO_InitStruct.Pin = GPIO_PIN_2 | GPIO_PIN_1;
+	  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+	  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+	  HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
+
+	  /*Configure GPIO pin : PD0 */
+	  GPIO_InitStruct.Pin = GPIO_PIN_0;
+	  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+	  GPIO_InitStruct.Pull = GPIO_NOPULL;
+	  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+	  /*Configure GPIO pins : PE */
+	  GPIO_InitStruct.Pin = GPIO_PIN_3 | GPIO_PIN_6;
+	  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+	  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+	  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
+	  /*Configure GPIO pins : GPIO9_Pin GPIO8_Pin GPIO1_Pin GPIO2_Pin
+	                           GPIO4_Pin */
+	  GPIO_InitStruct.Pin = GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_11 | GPIO_PIN_13;
+	  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	  GPIO_InitStruct.Pull = GPIO_NOPULL;
+	  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+	  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
+	  /*Configure GPIO pins : PF0 GPIO0_Pin GPIO3_Pin GPIO5_Pin */
+	  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9| GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15 ;
+	  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	  GPIO_InitStruct.Pull = GPIO_NOPULL;
+	  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+	  HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
+
+	  /*Configure GPIO pins : USB_PowerSwitchOn_Pin GPIO7_Pin GPIO6_Pin */
+	  GPIO_InitStruct.Pin = GPIO_PIN_9| GPIO_PIN_14;
+	  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	  GPIO_InitStruct.Pull = GPIO_NOPULL;
+	  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+	  HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
+
+	  /*Configure GPIO pins : LD1_Pin LD3_Pin LD2_Pin */
+	  GPIO_InitStruct.Pin = LD1_Pin|LD3_Pin|LD2_Pin;
+	  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	  GPIO_InitStruct.Pull = GPIO_NOPULL;
+	  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+	  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+	  /*Configure GPIO pin : PD1 */
+	  GPIO_InitStruct.Pin = GPIO_PIN_1 | GPIO_PIN_0;
+	  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	  GPIO_InitStruct.Pull = GPIO_NOPULL;
+	  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+	  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+}
+
+/* USER CODE BEGIN 4 */
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
