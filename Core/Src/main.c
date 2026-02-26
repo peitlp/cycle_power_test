@@ -75,7 +75,7 @@ UART_HandleTypeDef huart3;
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
-int activeCount 			= 0;
+volatile int activeCount 	= 0;
 
 int i;
 int cntDly 					= 0;
@@ -99,6 +99,7 @@ volatile uint32_t intCH1PulsCounter	= 0;
 volatile uint32_t intCH1NegCounter 	= 0;
 volatile int32_t intDetected 		= 0;
 volatile uint32_t startCNT;
+uint32_t startNTCtoggle	= 0;
 GPIO_PinState prev_CH1;
 GPIO_PinState prev_CH2;
 GPIO_PinState current_CH1;
@@ -314,48 +315,47 @@ uint32_t myADC_val;
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-int CheckIdleCurrent_result;
-  /* USER CODE END 1 */
+	/* USER CODE END 1 */
 
-  /* MCU Configuration--------------------------------------------------------*/
+	/* MCU Configuration--------------------------------------------------------*/
 
-  /* Reset of all peripherals, Initialises the Flash interface and the Systick. */
-  HAL_Init();
+	/* Reset of all peripherals, Initialises the Flash interface and the Systick. */
+	HAL_Init();
 
-  /* USER CODE BEGIN Init */
+	/* USER CODE BEGIN Init */
 
-  /* USER CODE END Init */
+	/* USER CODE END Init */
 
-  /* Configure the system clock */
-  SystemClock_Config();
+	/* Configure the system clock */
+	SystemClock_Config();
 
-  /* USER CODE BEGIN SysInit */
+	/* USER CODE BEGIN SysInit */
 
-  /* USER CODE END SysInit */
+	/* USER CODE END SysInit */
 
-  /* Initialise all configured peripherals */
-  MX_GPIO_Init();
-  if (0) MX_ETH_Init();				// disabled
-  MX_USART3_UART_Init();
-  if (0) MX_USB_OTG_FS_PCD_Init();  // disabled
-  if (0) MX_TIM14_Init();			// disabled
-  MX_ADC1_Init();
+	/* Initialise all configured peripherals */
+	MX_GPIO_Init();
+	if (0) MX_ETH_Init();				// disabled
+	MX_USART3_UART_Init();
+	if (0) MX_USB_OTG_FS_PCD_Init();  // disabled
+	if (0) MX_TIM14_Init();			// disabled
+	MX_ADC1_Init();
 
-  /* USER CODE BEGIN 2 */
-  DWT_Init();
-  /* USER CODE END 2 */
+	/* USER CODE BEGIN 2 */
+	DWT_Init();
+	/* USER CODE END 2 */
 
 
-  /* USER CODE BEGIN WHILE */
-  HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_RESET);
-  sprintf(msg, "BOOTING \r\n");
-  HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+	/* USER CODE BEGIN WHILE */
+	HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_RESET);
+	sprintf(msg, "BOOTING \r\n");
+	HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 
-  ADC_currentPresent_val 	= CURRENT_PRESENT_ADC_VAL;		// store constant values to variables
-  ADC_noCurrent_val 		= NO_CURRENT_ADC_VAL;
-  StartSet = 1;												// low start state must be detected before
-  	  	  	  	  	  	  	  								// before doing first start
-  HAL_GPIO_WritePin(GPIOF, CH2_TRIGGER, GPIO_PIN_RESET);	// reset trigger for CH2
+	ADC_currentPresent_val 	= CURRENT_PRESENT_ADC_VAL;		// store constant values to variables
+	ADC_noCurrent_val 		= NO_CURRENT_ADC_VAL;
+	StartSet = 1;												// low start state must be detected before
+															// before doing first start
+	HAL_GPIO_WritePin(GPIOF, CH2_TRIGGER, GPIO_PIN_RESET);	// reset trigger for CH2
 
   /* USER CODE END WHILE */
 
@@ -372,72 +372,73 @@ int CheckIdleCurrent_result;
 	HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
 	activeCount = 0;		//select first IGBT. It will switch on after start signal
 /* Infinite loop */
-  while (1) {
+	int tCnt = 10000;
+	startNTCtoggle	= HAL_GetTick();
+	while (1) {
 //detect input signals
-	current_CH1 	= HAL_GPIO_ReadPin(GPIOG, GPIO_PIN_1);			//CH1 from generator
-	current_CH2 	= HAL_GPIO_ReadPin(GPIOG, GPIO_PIN_0);			//CH2 from generator
-	StartProcess 	= HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_2);			//Start pulse from PLC
-	GPTestEnabled	= HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_6);			//GP signal from PLC
-	RstBlockValues	= HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_1);			//Start pulse from PLC
-/*
- 	int curVal;
-	static int prevVal= 0;
-	curVal = 100 * current_CH1 + 10 * current_CH2 + StartProcess;
-	if (curVal != prevVal ) {
-		sprintf(msg, "%03d \r\n", curVal);
-		HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
-	}
-	prevVal = curVal;
-*/
-//detect start pulse from PLC
-	if (OnStartDelay++ > 20000) OnStartDelay = 20000;
-	if (StartProcess == GPIO_PIN_SET && StartSet == 0 && OnStartDelay > 10000)
-	{
-		HAL_GPIO_WritePin(GPIOF, CH2_TRIGGER, GPIO_PIN_SET);	//trigger ch2
-		HAL_GPIO_WritePin(GPIOF, NTC_BANK, GPIO_PIN_RESET);		//reset temperature bank select pin
-		StartSet 		= 1;
-		ErrorNr 		= 0;											//reset errors when start pulse
-		Counter1++;
-		CH2PulsCounter 	= 0;
-		ValuesPLCResData = 0x3ff;
+		current_CH1 	= HAL_GPIO_ReadPin(GPIOG, GPIO_PIN_1);			//CH1 from generator
+		current_CH2 	= HAL_GPIO_ReadPin(GPIOG, GPIO_PIN_0);			//CH2 from generator
+		StartProcess 	= HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_2);			//Start pulse from PLC
+		GPTestEnabled	= HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_6);			//GP signal from PLC
+		RstBlockValues	= HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_1);			//Start pulse from PLC
 
-	}
-	else if (StartProcess == GPIO_PIN_RESET && StartSet == 1)
-	{
-		HAL_GPIO_WritePin(GPIOF, CH2_TRIGGER, GPIO_PIN_RESET);	//reset trigger for CH2
-		StartSet = 0;
-		Counter2++;
-	}
-	if  (StartProcess == GPIO_PIN_RESET && GPTestEnabled == GPIO_PIN_SET) ValuesPLCResData = 0x3ff;
-	if (RstBlockValues) ValuesPLCResData = 0x3ff;
-	if (Counter1 > 65000) Counter1=0;
-	if (Counter2 > 65000) Counter2=0;
+//detect start pulse from PLC
+		if (OnStartDelay++ > 20000) OnStartDelay = 20000;
+		if (StartProcess == GPIO_PIN_SET && StartSet == 0 && OnStartDelay > 10000)
+		{
+			HAL_GPIO_WritePin(GPIOF, CH2_TRIGGER, GPIO_PIN_SET);	//trigger ch2
+			HAL_GPIO_WritePin(GPIOF, NTC_BANK, GPIO_PIN_RESET);		//reset temperature bank select pin
+			StartSet 		= 1;
+			ErrorNr 		= 0;											//reset errors when start pulse
+			Counter1++;
+			CH2PulsCounter 	= 0;
+			startNTCtoggle	= HAL_GetTick();
+		}
+		else if (StartProcess == GPIO_PIN_RESET && StartSet == 1)
+		{
+			HAL_GPIO_WritePin(GPIOF, CH2_TRIGGER, GPIO_PIN_RESET);	//reset trigger for CH2
+			StartSet = 0;
+			Counter2++;
+		}
+// this happens only at the start of the cycle
+// if cyclecount > 1 this doesn't occurs
+		if  (StartProcess == GPIO_PIN_RESET && GPTestEnabled == GPIO_PIN_SET)
+		{
+			ValuesPLCResData = 0x3ff;
+			intCH1PulsCounter = 0;
+		}
+		if (RstBlockValues)
+		{
+			ValuesPLCResData = 0x3ff;
+			intCH1PulsCounter = 0;
+		}
+		if (Counter1 > 65000) Counter1=0;
+		if (Counter2 > 65000) Counter2=0;
 
 //detect not allowed input signals
-	if (current_CH1 == GPIO_PIN_SET && (current_CH2 == GPIO_PIN_RESET || StartProcess == GPIO_PIN_RESET)) FalsePG1++;
-	if (prev_CH1 != current_CH1) NrOfChanges_PG1++;
+		if (current_CH1 == GPIO_PIN_SET && (current_CH2 == GPIO_PIN_RESET || StartProcess == GPIO_PIN_RESET)) FalsePG1++;
+		if (prev_CH1 != current_CH1) NrOfChanges_PG1++;
 
-
-// check if CH2 rising edge - toggle temperature banks
-// CH2 should appear every 100ms
-	if (prev_CH2 == GPIO_PIN_RESET && current_CH2 == GPIO_PIN_SET) {
-		HAL_GPIO_WritePin(GPIOD, GEN_WARNING, GPIO_PIN_SET);
-		CH2PulsCounter++;
-		if (CH2PulsCounter % 5 == 0) {
+// toggle NTC bank
+		if ((HAL_GetTick() - startNTCtoggle >= 500) && (StartProcess == GPIO_PIN_SET))
+		{
+			startNTCtoggle += 500;
 			HAL_GPIO_TogglePin(GPIOF, NTC_BANK);
+			CH2PulsCounter++;
+			sprintf(msg, "%u \r\n",  CH2PulsCounter);
+			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 		}
-	}
 
 
-	if(current_CH2 == GPIO_PIN_SET && StartProcess == GPIO_PIN_SET && ErrorNr == 0 && OnStartDelay > 10000) {
-		//this is done in interrupt
-	}
-	else {
+		if(current_CH2 == GPIO_PIN_SET && StartProcess == GPIO_PIN_SET && ErrorNr == 0 && OnStartDelay > 10000) {
+			//this is done in interrupt
+		}
+		else {
 	// switch off outputs
-	// interrupt hasen't accured for a intDetected cycles
-		intDetected--;
-		int32_t t_initDetect = intDetected;
-		if (t_initDetect == 0) {
+	// interrupt hasen't occurred for a intDetected cycles
+			intDetected--;
+			int32_t t_initDetect = intDetected;
+			if (t_initDetect == 0) {
 				__disable_irq();
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
@@ -450,7 +451,6 @@ int CheckIdleCurrent_result;
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
 				activeCount = 0; 											//select first IGBT. It will switch on after start signal
-				intCH1PulsCounter = 0;
 				__enable_irq();
 				uint32_t end = DWT->CYCCNT;
 				uint32_t cycles = end - startCNT;
@@ -458,46 +458,44 @@ int CheckIdleCurrent_result;
 				sprintf(msg, "Reset IGBTs: %1u\r\n", us);
 				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 			}
-		else if (t_initDetect < 0) {
-			intDetected = -1;
-		//reset output RUNNING
-			IdleCounter++;
+			else if (t_initDetect < 0) {
+				intDetected = -1;
+			//reset output RUNNING
+				IdleCounter++;
 
-			if (IdleCounter == 42000) {
-				uint32_t end = DWT->CYCCNT;
-				uint32_t cycles = end - startCNT;
-				uint32_t us = cycles / (SystemCoreClock / 1000000U);
-				HAL_GPIO_WritePin(GPIOF, RUNNING,	GPIO_PIN_RESET);
-				sprintf(msg, "Reset RUNNING: %1u\r\n", us);
-				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+				if (IdleCounter == 42000) {
+					uint32_t end = DWT->CYCCNT;
+					uint32_t cycles = end - startCNT;
+					uint32_t us = cycles / (SystemCoreClock / 1000000U);
+					HAL_GPIO_WritePin(GPIOF, RUNNING,	GPIO_PIN_RESET);
+					sprintf(msg, "Reset RUNNING: %1u\r\n", us);
+					HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+				}
+				if (IdleCounter > 100000) IdleCounter = 100000;
+
+		//toggle NTC bank in idle state - if enabled
+				if (ENABLE_IDLE_NTC_TOGGLE) ToggleNTCBank();
+
+				//write low level values - test
+				if (DO_NOCURRENT_TEST) IdleCurrentMeasurementTest();
 			}
-			if (IdleCounter > 100000) IdleCounter = 100000;
-
-	//toggle NTC bank in idle state - if enabled
-			if (ENABLE_IDLE_NTC_TOGGLE) ToggleNTCBank();
-
-			//write low level values - test
-			if (DO_NOCURRENT_TEST) IdleCurrentMeasurementTest();
 		}
-	 }
 	 // call bad part detection procedure
-	 if (!GPTestEnabled) {
-		 BadPartDetect();
-	 }
-	 // check for GP test nr of cycles
-	 if (StartProcess == GPIO_PIN_RESET && GPTestEnabled ) {
-		 GPTest_NrOfCycles();
-	 }
+		if (!GPTestEnabled)
+		{
+			BadPartDetect();
+		}
+		// check for GP test nr of cycles
+		if (StartProcess == GPIO_PIN_RESET && GPTestEnabled ) {
+			GPTest_NrOfCycles();
+		}
 
-	// remember state of inputs
-
-	 prev_CH1 = current_CH1;
-	 prev_CH2 = current_CH2;
-
-	 CH1PulsCounter = intCH1PulsCounter;
-	 CH1NegCounter 	= intCH1NegCounter;
-
-  }
+		// remember state of inputs
+		 prev_CH1 = current_CH1;
+		 prev_CH2 = current_CH2;
+		 CH1PulsCounter = intCH1PulsCounter;
+		 CH1NegCounter 	= intCH1NegCounter;
+	}
   /* USER CODE END 3 */
 }
 
@@ -508,7 +506,7 @@ void HAL_GPIO_EXTI_Callback( uint16_t GPIO_Pin)	//Interrupt for GPIO pins
 	GPIO_PinState 	EXTI_current_CH2 	= HAL_GPIO_ReadPin(GPIOG, GPIO_PIN_0);			//CH2 from generator
 	GPIO_PinState 	EXTI_StartProcess 	= HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_2);			//Start pulse from PLC
 
-	if (EXTI_current_CH1 == GPIO_PIN_SET) intCH1PulsCounter++;
+	//if (EXTI_current_CH1 == GPIO_PIN_SET) intCH1PulsCounter++;
 	intDetected = 40000;
 	startCNT = DWT->CYCCNT;
 
@@ -516,6 +514,7 @@ void HAL_GPIO_EXTI_Callback( uint16_t GPIO_Pin)	//Interrupt for GPIO pins
 		 HAL_GPIO_WritePin(GPIOF, RUNNING,	GPIO_PIN_SET);
 		 IdleCounter = 0;
 		 curValsCntr = 0;
+		 intCH1PulsCounter++;
 	 //***************************************************
 	 //************* Forcing all IGBTs to work
 	 //***************************************************
@@ -535,10 +534,10 @@ void HAL_GPIO_EXTI_Callback( uint16_t GPIO_Pin)	//Interrupt for GPIO pins
 				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
-				/*
-				sprintf(msg, "%03d, %d \r\n", EXTI_current_CH1 * 100 + EXTI_current_CH2 * 10 + EXTI_StartProcess, intCH1PulsCounter);
-				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
-				*/
+				//sprintf(msg, "%03d, %d \r\n", EXTI_current_CH1 * 100 + EXTI_current_CH2 * 10 + EXTI_StartProcess, intCH1PulsCounter);
+				//sprintf(msg, "%03u \r\n",  intCH1PulsCounter);
+				//HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+
 				break;
 			case 1:
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
