@@ -372,7 +372,6 @@ int main(void)
 	HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
 	activeCount = 0;		//select first IGBT. It will switch on after start signal
 /* Infinite loop */
-	int tCnt = 10000;
 	startNTCtoggle	= HAL_GetTick();
 	while (1) {
 //detect input signals
