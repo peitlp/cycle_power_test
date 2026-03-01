@@ -92,7 +92,7 @@ int curValsCntr 			= 0;
 int currValsMax, currValsMin;
 long  	IdleCounter 		= 0;
 long  	OnStartDelay 		= 0;
-int 	CH2PulsCounter		= 0;
+volatile int 	CH2PulsCounter		= 0;
 uint32_t CH1PulsCounter		= 0;
 uint32_t CH1NegCounter		= 0;
 volatile uint32_t intCH1PulsCounter	= 0;
@@ -381,17 +381,15 @@ int main(void)
 		GPTestEnabled	= HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_6);			//GP signal from PLC
 		RstBlockValues	= HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_1);			//Start pulse from PLC
 
+
 //detect start pulse from PLC
 		if (OnStartDelay++ > 20000) OnStartDelay = 20000;
 		if (StartProcess == GPIO_PIN_SET && StartSet == 0 && OnStartDelay > 10000)
 		{
 			HAL_GPIO_WritePin(GPIOF, CH2_TRIGGER, GPIO_PIN_SET);	//trigger ch2
-			HAL_GPIO_WritePin(GPIOF, NTC_BANK, GPIO_PIN_RESET);		//reset temperature bank select pin
 			StartSet 		= 1;
 			ErrorNr 		= 0;											//reset errors when start pulse
 			Counter1++;
-			CH2PulsCounter 	= 0;
-			startNTCtoggle	= HAL_GetTick();
 		}
 		else if (StartProcess == GPIO_PIN_RESET && StartSet == 1)
 		{
@@ -403,13 +401,24 @@ int main(void)
 // if cyclecount > 1 this doesn't occurs
 		if  (StartProcess == GPIO_PIN_RESET && GPTestEnabled == GPIO_PIN_SET)
 		{
-			ValuesPLCResData = 0x3ff;
-			intCH1PulsCounter = 0;
+			ValuesPLCResData 	= 0x3ff;
+			intCH1PulsCounter 	= 0;
+			CH2PulsCounter 		= 0;
+			HAL_GPIO_WritePin(GPIOF, NTC_BANK, GPIO_PIN_RESET);		//reset temperature bank select pin
+			startNTCtoggle	= HAL_GetTick();
 		}
+//switch on warrning light
+		if (prev_CH2 == GPIO_PIN_RESET && current_CH2 == GPIO_PIN_SET) {
+			HAL_GPIO_WritePin(GPIOD, GEN_WARNING, GPIO_PIN_SET);
+		}
+//RstBlockValues reset command
 		if (RstBlockValues)
 		{
-			ValuesPLCResData = 0x3ff;
-			intCH1PulsCounter = 0;
+			sprintf(msg, "RstBlockValues ON\r\n");
+			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+			ValuesPLCResData 	= 0x3ff;
+			intCH1PulsCounter 	= 0;
+			CH2PulsCounter 		= 0;
 		}
 		if (Counter1 > 65000) Counter1=0;
 		if (Counter2 > 65000) Counter2=0;
@@ -423,9 +432,8 @@ int main(void)
 		{
 			startNTCtoggle += 500;
 			HAL_GPIO_TogglePin(GPIOF, NTC_BANK);
-			CH2PulsCounter++;
-			sprintf(msg, "%u \r\n",  CH2PulsCounter);
-			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+			//sprintf(msg, "0x%X \r\n",ValuesPLCResData);
+			//HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 		}
 
 
@@ -454,7 +462,7 @@ int main(void)
 				uint32_t end = DWT->CYCCNT;
 				uint32_t cycles = end - startCNT;
 				uint32_t us = cycles / (SystemCoreClock / 1000000U);
-				sprintf(msg, "Reset IGBTs: %1u\r\n", us);
+				sprintf(msg, "Reset IGBTs: %1u\r\n", (uint16_t)us);
 				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 			}
 			else if (t_initDetect < 0) {
@@ -501,6 +509,7 @@ int main(void)
 
 void HAL_GPIO_EXTI_Callback( uint16_t GPIO_Pin)	//Interrupt for GPIO pins
 {
+	char tmpResult;
 	GPIO_PinState	EXTI_current_CH1 	= HAL_GPIO_ReadPin(GPIOG, GPIO_PIN_1);			//CH1 from generator
 	GPIO_PinState 	EXTI_current_CH2 	= HAL_GPIO_ReadPin(GPIOG, GPIO_PIN_0);			//CH2 from generator
 	GPIO_PinState 	EXTI_StartProcess 	= HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_2);			//Start pulse from PLC
@@ -523,7 +532,9 @@ void HAL_GPIO_EXTI_Callback( uint16_t GPIO_Pin)	//Interrupt for GPIO pins
 	 //***************************************************
 		 switch (activeCount) {
 			case 0:
-				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13,	GPIO_PIN_SET && !(GPTestEnabled && CH2PulsCounter > 50) && (ValuesPLCResData & (1 << activeCount)));
+			//	HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13,	GPIO_PIN_SET && (CH2PulsCounter != 50) && !(GPTestEnabled && CH2PulsCounter > 50) && (ValuesPLCResData & (1 << activeCount)));
+				tmpResult = !(GPTestEnabled && CH2PulsCounter > 50) && (ValuesPLCResData & (1 << activeCount));
+				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13,	GPIO_PIN_SET && tmpResult);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
@@ -533,14 +544,19 @@ void HAL_GPIO_EXTI_Callback( uint16_t GPIO_Pin)	//Interrupt for GPIO pins
 				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+#ifdef DEBUGINT
+				sprintf(msg, "%u, %u \r\n",  activeCount, tmpResult);
+				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+#endif
 				//sprintf(msg, "%03d, %d \r\n", EXTI_current_CH1 * 100 + EXTI_current_CH2 * 10 + EXTI_StartProcess, intCH1PulsCounter);
 				//sprintf(msg, "%03u \r\n",  intCH1PulsCounter);
 				//HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 
 				break;
 			case 1:
+				tmpResult = !(GPTestEnabled && CH2PulsCounter > 70) && (ValuesPLCResData & (1 << activeCount));
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
-				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_SET && !(GPTestEnabled && CH2PulsCounter > 70) && (ValuesPLCResData & (1 << activeCount)));
+				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_SET && tmpResult);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
@@ -549,11 +565,16 @@ void HAL_GPIO_EXTI_Callback( uint16_t GPIO_Pin)	//Interrupt for GPIO pins
 				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+#ifdef DEBUGINT
+				sprintf(msg, "%u, %u \r\n",  activeCount, tmpResult);
+				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+#endif
 				break;
 			case 2:
+				tmpResult = !(GPTestEnabled && CH2PulsCounter > 90) && (ValuesPLCResData & (1 << activeCount));
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
-				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_SET && !(GPTestEnabled && CH2PulsCounter > 90) && (ValuesPLCResData & (1 << activeCount)));
+				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_SET && tmpResult );
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);
@@ -561,51 +582,71 @@ void HAL_GPIO_EXTI_Callback( uint16_t GPIO_Pin)	//Interrupt for GPIO pins
 				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+#ifdef DEBUGINT
+				sprintf(msg, "%u, %u \r\n",  activeCount, tmpResult);
+				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+#endif
 				break;
 			case 3:
+				tmpResult = !(GPTestEnabled && CH2PulsCounter > 110) && (ValuesPLCResData & (1 << activeCount));
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
-				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_SET && !(GPTestEnabled && CH2PulsCounter > 110) && (ValuesPLCResData & (1 << activeCount)));
+				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_SET && tmpResult);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+#ifdef DEBUGINT
+				sprintf(msg, "%u, %u \r\n",  activeCount, tmpResult);
+				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+#endif
 				break;
 			case 4:
+				tmpResult = !(GPTestEnabled && CH2PulsCounter > 130) && (ValuesPLCResData & (1 << activeCount));
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
-				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_SET && !(GPTestEnabled && CH2PulsCounter > 130) && (ValuesPLCResData & (1 << activeCount)));
+				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_SET && tmpResult);
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+#ifdef DEBUGINT
+				sprintf(msg, "%u, %u \r\n",  activeCount, tmpResult);
+				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+#endif
 				break;
 			case 5:
+				tmpResult = !(GPTestEnabled && CH2PulsCounter > 150) && (ValuesPLCResData & (1 << activeCount));
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
-				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_SET && !(GPTestEnabled && CH2PulsCounter > 150) && (ValuesPLCResData & (1 << activeCount)));
+				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_SET && tmpResult);
 				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
+#ifdef DEBUGINT
+				sprintf(msg, "%u, %u \r\n",  activeCount, tmpResult);
+				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+#endif
 				break;
 			case 6:
+				tmpResult = !(GPTestEnabled && CH2PulsCounter > 170) && (ValuesPLCResData & (1 << activeCount));
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOF, GPIO_PIN_15, 	GPIO_PIN_RESET);
-				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_SET && !(GPTestEnabled && CH2PulsCounter > 170) && (ValuesPLCResData & (1 << activeCount)));
+				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, 	GPIO_PIN_SET && tmpResult);
 				HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, 	GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, 	GPIO_PIN_RESET);
@@ -665,6 +706,7 @@ void HAL_GPIO_EXTI_Callback( uint16_t GPIO_Pin)	//Interrupt for GPIO pins
 		cntDly = 0;
 		if (activeCount == 10) {
 			activeCount = 0;
+			CH2PulsCounter++;
 		}
 
 		 //CH1 = low, CH2 = high, Start = HIGH
@@ -1173,7 +1215,6 @@ void ToggleNTCBank()
 	}
 	else if (IdleCounter >= 12000){
 		HAL_GPIO_WritePin(GPIOF, NTC_BANK, GPIO_PIN_RESET);	//reset temperature bank select pin
-		CH2PulsCounter = 0;
 		if (IdleCounter == 12000)  {
 			sprintf(msg, "Counter1: %d, Counter2: %d \r\n", Counter1, Counter2);
 			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
