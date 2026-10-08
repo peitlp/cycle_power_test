@@ -113,6 +113,7 @@ GPIO_PinState PLCClk;
 GPIO_PinState PLCResData;
 GPIO_PinState prev_PLCClock;
 GPIO_PinState prev_PLCResData;
+GPIO_PinState prev_StartProcess;
 
 GPIO_PinState PLCClk_GP		= 0;
 GPIO_PinState PLCResData_GP	= 0;
@@ -403,6 +404,7 @@ int main(void)
 		{
 			ValuesPLCResData 	= 0x3ff;
 			intCH1PulsCounter 	= 0;
+			intCH1NegCounter 	= 0;
 			CH2PulsCounter 		= 0;
 			HAL_GPIO_WritePin(GPIOF, NTC_BANK, GPIO_PIN_RESET);		//reset temperature bank select pin
 			startNTCtoggle	= HAL_GetTick();
@@ -497,9 +499,16 @@ int main(void)
 			GPTest_NrOfCycles();
 		}
 
+		if (StartProcess == GPIO_PIN_RESET && StartProcess !=prev_StartProcess) {
+			sprintf(msg, "Measurement finished: %u, %u, 0x%x\r\n", CH1PulsCounter, CH1NegCounter, ValuesPLCResData);
+			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+		}
+
+
 		// remember state of inputs
 		 prev_CH1 = current_CH1;
 		 prev_CH2 = current_CH2;
+		 prev_StartProcess = StartProcess;
 		 CH1PulsCounter = intCH1PulsCounter;
 		 CH1NegCounter 	= intCH1NegCounter;
 	}
@@ -518,7 +527,8 @@ void HAL_GPIO_EXTI_Callback( uint16_t GPIO_Pin)	//Interrupt for GPIO pins
 	intDetected = 40000;
 	startCNT = DWT->CYCCNT;
 
-	if(GPIO_Pin == GPIO_PIN_1 && EXTI_current_CH1 == GPIO_PIN_SET && EXTI_current_CH2 == GPIO_PIN_SET && EXTI_StartProcess == GPIO_PIN_SET && ErrorNr == 0 && OnStartDelay > 10000) {
+//	if(GPIO_Pin == GPIO_PIN_1 && EXTI_current_CH1 == GPIO_PIN_SET && EXTI_current_CH2 == GPIO_PIN_SET && EXTI_StartProcess == GPIO_PIN_SET && ErrorNr == 0 && OnStartDelay > 10000) {
+	if(GPIO_Pin == GPIO_PIN_1 && EXTI_current_CH1 == GPIO_PIN_SET && EXTI_StartProcess == GPIO_PIN_SET && ErrorNr == 0 && OnStartDelay > 10000) {
 		 HAL_GPIO_WritePin(GPIOF, RUNNING,	GPIO_PIN_SET);
 		 IdleCounter = 0;
 		 curValsCntr = 0;
@@ -701,10 +711,12 @@ void HAL_GPIO_EXTI_Callback( uint16_t GPIO_Pin)	//Interrupt for GPIO pins
 				break;
 		 }
 	}
-	else {
+	if (GPIO_Pin == GPIO_PIN_1 && EXTI_current_CH1 == GPIO_PIN_RESET)
+	{
 		activeCount++;
+		intCH1NegCounter++;
 		cntDly = 0;
-		if (activeCount == 10) {
+		if (activeCount >= 10) {
 			activeCount = 0;
 			CH2PulsCounter++;
 		}
@@ -746,14 +758,14 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = 4;
-  RCC_OscInitStruct.PLL.PLLN = 144;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 6;
+  RCC_OscInitStruct.OscillatorType 	= RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState 		= RCC_HSE_BYPASS;
+  RCC_OscInitStruct.PLL.PLLState 	= RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource 	= RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM 		= 4;
+  RCC_OscInitStruct.PLL.PLLN 		= 144;
+  RCC_OscInitStruct.PLL.PLLP 		= RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ 		= 6;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
